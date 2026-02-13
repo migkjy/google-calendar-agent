@@ -11,6 +11,15 @@ export async function getActiveReminders() {
     .where(eq(remindersSchema.active, true));
 }
 
+// 리마인더 단건 조회
+export async function getReminderById(id: string) {
+  const [reminder] = await db
+    .select()
+    .from(remindersSchema)
+    .where(eq(remindersSchema.id, id));
+  return reminder ?? null;
+}
+
 // 리마인더 생성
 export async function createReminder(input: {
   title: string;
@@ -48,9 +57,14 @@ export async function updateReminder(
   return reminder;
 }
 
-// 리마인더 삭제
+// 리마인더 삭제 (soft delete: active=false)
 export async function deleteReminder(id: string) {
-  await db.delete(remindersSchema).where(eq(remindersSchema.id, id));
+  const [reminder] = await db
+    .update(remindersSchema)
+    .set({ active: false })
+    .where(eq(remindersSchema.id, id))
+    .returning();
+  return reminder;
 }
 
 // 트리거 대상 리마인더 조회 (스케줄러용)

@@ -1,65 +1,187 @@
-import Image from "next/image";
+"use client";
+
+import { useEffect, useState } from "react";
+
+interface AuthStatus {
+  connected: boolean;
+  expired?: boolean;
+  message?: string;
+}
+
+interface Reminder {
+  id: string;
+  title: string;
+  type: string;
+  active: boolean;
+}
 
 export default function Home() {
+  const [authStatus, setAuthStatus] = useState<AuthStatus>({ connected: false });
+  const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchData() {
+      try {
+        const [authRes, remindersRes] = await Promise.all([
+          fetch("/api/auth/status").catch(() => null),
+          fetch("/api/reminders").catch(() => null),
+        ]);
+
+        if (authRes?.ok) {
+          setAuthStatus(await authRes.json());
+        }
+        if (remindersRes?.ok) {
+          const data = await remindersRes.json();
+          setReminders(data.reminders ?? []);
+        }
+      } catch {
+        // Fetch may fail
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchData();
+  }, []);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <div className="min-h-screen bg-zinc-50 p-8 font-sans dark:bg-zinc-950">
+      <div className="mx-auto max-w-2xl">
+        <h1 className="mb-2 text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+          Google Calendar AI Agent
+        </h1>
+        <p className="mb-8 text-zinc-500 dark:text-zinc-400">
+          Status Dashboard
+        </p>
+
+        {/* OAuth Status */}
+        <section className="mb-6 rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+          <h2 className="mb-3 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            Google Calendar Connection
+          </h2>
+          <div className="flex items-center gap-3">
+            <span
+              className={`inline-block h-3 w-3 rounded-full ${
+                loading
+                  ? "bg-zinc-300"
+                  : authStatus.connected && !authStatus.expired
+                    ? "bg-green-500"
+                    : "bg-red-500"
+              }`}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+            <span className="text-zinc-700 dark:text-zinc-300">
+              {loading
+                ? "Checking..."
+                : authStatus.connected
+                  ? authStatus.expired
+                    ? "Token expired - needs refresh"
+                    : "Connected"
+                  : "Not connected"}
+            </span>
+          </div>
+          <button
+            disabled
+            className="mt-4 cursor-not-allowed rounded-md bg-zinc-300 px-4 py-2 text-sm text-zinc-500 dark:bg-zinc-700 dark:text-zinc-400"
+            title="OAuth implementation pending"
           >
-            Documentation
-          </a>
-        </div>
-      </main>
+            Connect Google Calendar (Coming Soon)
+          </button>
+        </section>
+
+        {/* Active Reminders */}
+        <section className="mb-6 rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+          <h2 className="mb-3 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            Active Reminders ({loading ? "..." : reminders.length})
+          </h2>
+          {loading ? (
+            <p className="text-zinc-500 dark:text-zinc-400">Loading...</p>
+          ) : reminders.length === 0 ? (
+            <p className="text-zinc-500 dark:text-zinc-400">
+              No active reminders.
+            </p>
+          ) : (
+            <ul className="space-y-2">
+              {reminders.map((r) => (
+                <li
+                  key={r.id}
+                  className="flex items-center justify-between rounded-md border border-zinc-100 px-4 py-3 dark:border-zinc-800"
+                >
+                  <div>
+                    <span className="font-medium text-zinc-900 dark:text-zinc-100">
+                      {r.title}
+                    </span>
+                    <span className="ml-2 rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      {r.type}
+                    </span>
+                  </div>
+                  <span
+                    className={`text-xs ${r.active ? "text-green-600" : "text-zinc-400"}`}
+                  >
+                    {r.active ? "Active" : "Inactive"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+
+        {/* API Endpoints */}
+        <section className="rounded-lg border border-zinc-200 bg-white p-6 dark:border-zinc-800 dark:bg-zinc-900">
+          <h2 className="mb-3 text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            API Endpoints
+          </h2>
+          <ul className="space-y-1 text-sm text-zinc-600 dark:text-zinc-400">
+            <li>
+              <code className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
+                GET /api/auth/status
+              </code>{" "}
+              - OAuth connection status
+            </li>
+            <li>
+              <code className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
+                GET /api/reminders
+              </code>{" "}
+              - List active reminders
+            </li>
+            <li>
+              <code className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
+                POST /api/reminders
+              </code>{" "}
+              - Create a reminder
+            </li>
+            <li>
+              <code className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
+                GET /api/reminders/[id]
+              </code>{" "}
+              - Get reminder detail
+            </li>
+            <li>
+              <code className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
+                PUT /api/reminders/[id]
+              </code>{" "}
+              - Update reminder
+            </li>
+            <li>
+              <code className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
+                DELETE /api/reminders/[id]
+              </code>{" "}
+              - Deactivate reminder
+            </li>
+            <li>
+              <code className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
+                GET /api/reminders/check
+              </code>{" "}
+              - Check triggered reminders
+            </li>
+            <li>
+              <code className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
+                POST /api/scheduler/tick
+              </code>{" "}
+              - Scheduler tick (process reminders)
+            </li>
+          </ul>
+        </section>
+      </div>
     </div>
   );
 }
