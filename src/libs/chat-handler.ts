@@ -1,9 +1,12 @@
+import { and, asc, desc, eq, lt } from "drizzle-orm";
 import OpenAI from "openai";
 
+import { db } from "@/libs/db";
 import {
   createEvent,
   deleteEvent,
   getEvents,
+  updateEvent,
   type CalendarEvent,
 } from "@/libs/google-calendar";
 import {
@@ -14,10 +17,12 @@ import {
   type GoogleTask,
 } from "@/libs/google-tasks";
 import { sendMessage } from "@/libs/telegram";
+import { chatHistorySchema } from "@/models/schema";
 
 type ChatFunction =
   | "list_events"
   | "create_event"
+  | "update_event"
   | "delete_event"
   | "list_tasks"
   | "create_task"
@@ -91,6 +96,48 @@ const TOOLS: OpenAI.Chat.ChatCompletionTool[] = [
           },
         },
         required: ["summary", "date", "start_time"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "update_event",
+      description:
+        "Update/modify an existing calendar event. Use when user wants to change time, title, description, or location of an event. Search by the original title first.",
+      parameters: {
+        type: "object",
+        properties: {
+          search_summary: {
+            type: "string",
+            description: "Original event title to search for",
+          },
+          date: {
+            type: "string",
+            description: "Date of the event in YYYY-MM-DD format. Default: today.",
+          },
+          new_summary: {
+            type: "string",
+            description: "New event title (optional, only if changing title)",
+          },
+          new_start_time: {
+            type: "string",
+            description: "New start time in HH:MM (24h) format (optional)",
+          },
+          new_end_time: {
+            type: "string",
+            description: "New end time in HH:MM (24h) format (optional)",
+          },
+          new_description: {
+            type: "string",
+            description: "New event description (optional)",
+          },
+          new_location: {
+            type: "string",
+            description: "New event location (optional)",
+          },
+        },
+        required: ["search_summary"],
       },
     },
   },
@@ -212,24 +259,83 @@ function tomorrowStr(): string {
   return d.toISOString().slice(0, 10);
 }
 
+// --- Chat History ---
+
+async function getChatHistory(
+  chatId: string,
+): Promise<{ role: "user" | "assistant"; content: string }[]> {
+  const rows = await db
+    .select({ role: chatHistorySchema.role, content: chatHistorySchema.content })
+    .from(chatHistorySchema)
+    .where(eq(chatHistorySchema.chatId, Number(chatId)))
+    .orderBy(asc(chatHistorySchema.id))
+    .limit(10);
+
+  return rows.map((r) => ({
+    role: r.role as "user" | "assistant",
+    content: r.content,
+  }));
+}
+
+async function saveChatMessage(
+  chatId: string,
+  role: "user" | "assistant",
+  content: string,
+): Promise<void> {
+  await db.insert(chatHistorySchema).values({
+    chatId: Number(chatId),
+    role,
+    content,
+  });
+
+  // Cleanup: keep only the latest 10 messages per chat_id
+  const rows = await db
+    .select({ id: chatHistorySchema.id })
+    .from(chatHistorySchema)
+    .where(eq(chatHistorySchema.chatId, Number(chatId)))
+    .orderBy(desc(chatHistorySchema.id))
+    .limit(10);
+
+  if (rows.length === 10) {
+    const minId = rows[rows.length - 1].id;
+    await db.delete(chatHistorySchema).where(
+      and(
+        eq(chatHistorySchema.chatId, Number(chatId)),
+        lt(chatHistorySchema.id, minId),
+      ),
+    );
+  }
+}
+
+// --- Intent Parsing ---
+
 async function parseIntent(
   client: OpenAI,
   userMessage: string,
+  history: { role: "user" | "assistant"; content: string }[],
 ): Promise<ParsedIntent> {
   const now = new Date();
-  const systemPrompt = `You are a Korean-speaking calendar/task assistant. Today is ${todayStr()} (${now.toLocaleDateString("ko-KR", { weekday: "long" })}). Current time: ${now.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}.
+  const systemPrompt = `당신은 김준영 대표의 개인 일정 비서입니다.
+간결하고 친근한 한국어로 답변하세요. 존댓말을 사용하세요.
+핵심만 답변하고 불필요한 설명은 생략하세요.
+일정이나 할일을 추가/수정/삭제할 때는 반드시 결과를 확인 메시지로 알려주세요.
+오늘 날짜와 시간을 항상 인지하고 '내일', '다음주' 등 상대적 시간을 정확히 계산하세요.
 
-When the user says relative dates like "내일" (tomorrow), "오늘" (today), "이번주" (this week), "다음주" (next week), convert them to actual YYYY-MM-DD dates.
-When the user says times like "3시" (3 o'clock), interpret in context (PM for afternoon meetings, AM for morning).
+오늘: ${todayStr()} (${now.toLocaleDateString("ko-KR", { weekday: "long" })})
+현재 시각: ${now.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}`;
 
-Decide which function to call based on the user's message. If the message doesn't match any function, respond conversationally.`;
+  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+    { role: "system", content: systemPrompt },
+    ...history.map((h) => ({
+      role: h.role as "user" | "assistant",
+      content: h.content,
+    })),
+    { role: "user", content: userMessage },
+  ];
 
   const response = await client.chat.completions.create({
     model: "gpt-4o-mini",
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userMessage },
-    ],
+    messages,
     tools: TOOLS,
     tool_choice: "auto",
     temperature: 0.1,
@@ -253,6 +359,8 @@ Decide which function to call based on the user's message. If the message doesn'
     parameters: { response: msg?.content ?? "무슨 말씀이신지 잘 모르겠어요." },
   };
 }
+
+// --- Function Executors ---
 
 async function executeListEvents(params: Record<string, string | undefined>): Promise<string> {
   const date = params.date ?? todayStr();
@@ -322,6 +430,78 @@ async function executeCreateEvent(params: Record<string, string | undefined>): P
     minute: "2-digit",
   });
   return `"${event.summary}" 일정을 ${date} ${startDisplay}에 추가했습니다.`;
+}
+
+async function executeUpdateEvent(params: Record<string, string | undefined>): Promise<string> {
+  const searchTitle = params.search_summary!.toLowerCase();
+  const date = params.date ?? todayStr();
+
+  const from = new Date(`${date}T00:00:00+09:00`);
+  const to = new Date(from.getTime() + 24 * 60 * 60 * 1000);
+  const events = await getEvents(from.toISOString(), to.toISOString());
+
+  const match = events.find(
+    (e: CalendarEvent) => e.summary.toLowerCase().includes(searchTitle),
+  );
+  if (!match) {
+    return `"${params.search_summary}" 일정을 찾을 수 없습니다.`;
+  }
+
+  const updates: {
+    summary?: string;
+    description?: string;
+    location?: string;
+    start?: { dateTime: string; timeZone: string };
+    end?: { dateTime: string; timeZone: string };
+  } = {};
+
+  if (params.new_summary) {
+    updates.summary = params.new_summary;
+  }
+  if (params.new_description) {
+    updates.description = params.new_description;
+  }
+  if (params.new_location) {
+    updates.location = params.new_location;
+  }
+  if (params.new_start_time) {
+    const [h, m] = params.new_start_time.split(":");
+    updates.start = {
+      dateTime: `${date}T${h.padStart(2, "0")}:${(m ?? "00").padStart(2, "0")}:00+09:00`,
+      timeZone: "Asia/Seoul",
+    };
+  }
+  if (params.new_end_time) {
+    const [h, m] = params.new_end_time.split(":");
+    updates.end = {
+      dateTime: `${date}T${h.padStart(2, "0")}:${(m ?? "00").padStart(2, "0")}:00+09:00`,
+      timeZone: "Asia/Seoul",
+    };
+  }
+
+  // If only start time changed but no end time, shift end by same duration
+  if (updates.start && !updates.end && match.start.dateTime && match.end.dateTime) {
+    const origStart = new Date(match.start.dateTime).getTime();
+    const origEnd = new Date(match.end.dateTime).getTime();
+    const duration = origEnd - origStart;
+    const newStart = new Date(updates.start.dateTime).getTime();
+    const newEnd = new Date(newStart + duration);
+    updates.end = {
+      dateTime: newEnd.toISOString().replace("Z", "+09:00"),
+      timeZone: "Asia/Seoul",
+    };
+  }
+
+  const updated = await updateEvent(match.id, updates);
+
+  const changes: string[] = [];
+  if (params.new_summary) changes.push(`제목: "${params.new_summary}"`);
+  if (params.new_start_time) changes.push(`시작: ${params.new_start_time}`);
+  if (params.new_end_time) changes.push(`종료: ${params.new_end_time}`);
+  if (params.new_description) changes.push(`설명 수정`);
+  if (params.new_location) changes.push(`장소: ${params.new_location}`);
+
+  return `"${match.summary}" 일정을 수정했습니다.\n변경: ${changes.join(", ")}`;
 }
 
 async function executeDeleteEvent(params: Record<string, string | undefined>): Promise<string> {
@@ -416,7 +596,13 @@ export async function handleChatMessage(
   let reply: string;
 
   try {
-    const intent = await parseIntent(client, userMessage);
+    // Load chat history for context
+    const history = await getChatHistory(chatId);
+
+    // Save user message
+    await saveChatMessage(chatId, "user", userMessage);
+
+    const intent = await parseIntent(client, userMessage, history);
 
     switch (intent.function) {
       case "list_events":
@@ -424,6 +610,9 @@ export async function handleChatMessage(
         break;
       case "create_event":
         reply = await executeCreateEvent(intent.parameters);
+        break;
+      case "update_event":
+        reply = await executeUpdateEvent(intent.parameters);
         break;
       case "delete_event":
         reply = await executeDeleteEvent(intent.parameters);
@@ -445,6 +634,9 @@ export async function handleChatMessage(
         reply = intent.parameters.response ?? "무슨 말씀이신지 잘 모르겠어요.";
         break;
     }
+
+    // Save assistant reply
+    await saveChatMessage(chatId, "assistant", reply);
   } catch (error) {
     console.error("Chat handler error:", error);
     reply =
