@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { getEvents } from "@/libs/google-calendar";
+import { createEvent, getEvents } from "@/libs/google-calendar";
 
 export async function GET(request: Request) {
   try {
@@ -26,6 +26,35 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("Calendar events error:", error);
     const message = error instanceof Error ? error.message : "Failed to fetch events";
+    const status = message.includes("not connected") ? 401 : 500;
+    return NextResponse.json({ error: message }, { status });
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const { summary, description, location, start, end } = body;
+
+    if (!summary || !start?.dateTime || !end?.dateTime) {
+      return NextResponse.json(
+        { error: "summary, start.dateTime, and end.dateTime are required" },
+        { status: 400 },
+      );
+    }
+
+    const event = await createEvent({
+      summary,
+      description,
+      location,
+      start: { dateTime: start.dateTime, timeZone: start.timeZone ?? "Asia/Seoul" },
+      end: { dateTime: end.dateTime, timeZone: end.timeZone ?? "Asia/Seoul" },
+    });
+
+    return NextResponse.json({ event }, { status: 201 });
+  } catch (error) {
+    console.error("Calendar event create error:", error);
+    const message = error instanceof Error ? error.message : "Failed to create event";
     const status = message.includes("not connected") ? 401 : 500;
     return NextResponse.json({ error: message }, { status });
   }

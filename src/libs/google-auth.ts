@@ -5,7 +5,10 @@ import { calendarTokensSchema } from "@/models/schema";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
-const SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+const SCOPES = [
+  "https://www.googleapis.com/auth/calendar",
+  "https://www.googleapis.com/auth/tasks",
+].join(" ");
 
 function getClientId(): string {
   const id = process.env.GOOGLE_CLIENT_ID;
@@ -32,7 +35,7 @@ export function getAuthUrl(): string {
     client_id: getClientId(),
     redirect_uri: getRedirectUri(),
     response_type: "code",
-    scope: SCOPE,
+    scope: SCOPES,
     access_type: "offline",
     prompt: "consent",
   });

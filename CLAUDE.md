@@ -7,6 +7,20 @@ CEO의 Google Calendar를 기반으로 일정을 자동 분석, 요약, 추천, 
 
 **핵심 목표**: CEO가 캘린더에 일정을 넣기만 하면, 나머지(리마인더, 일정 요약, 충돌 감지, 빈 시간 추천)는 모두 AI가 자동 처리.
 
+## 브랜딩 & 배포
+
+- **프로덕션 URL**: https://google-calendar-agent-eight.vercel.app
+- **GitHub**: https://github.com/migkjy/google-calendar-agent
+- **프로젝트 경로**: `/Users/nbs22/(Claude)/(claude).projects/business-builder/projects/google-calendar-agent/`
+
+## 현재 상태 (2026-02-13)
+
+- Vercel 배포 완료
+- 리마인더 CRUD API 완성 (`/api/reminders`, `/api/reminders/[id]`, `/api/reminders/check`)
+- 스케줄러 틱 엔드포인트 완성 (`/api/scheduler/tick`) — 리마인더 체크만, 캘린더 미연결
+- "경찰벌금내기" 반복 리마인더 등록 완료 (매주 월요일 09:00)
+- **OAuth 미연결** — CEO가 Google Cloud Console에서 client_id/client_secret 제공 필요
+
 ## 기술 스택
 
 | 영역 | 기술 |
@@ -15,9 +29,9 @@ CEO의 Google Calendar를 기반으로 일정을 자동 분석, 요약, 추천, 
 | 캘린더 API | Google Calendar API v3 |
 | 인증 | OAuth 2.0 (server-side, refresh token 자동 갱신) |
 | DB | NeonDB PostgreSQL (기존 인프라 — 토큰, 리마인더, 일정 캐시 저장) |
-| AI | Gemini Flash Lite API (일정 분석/요약) |
+| AI | OpenAI gpt-4o-mini (일정 분석/요약) |
 | 알림 | 텔레그램 봇 API (기존 MacJarvisBot 활용) |
-| 배포 | Vercel |
+| 배포 | fly.io (Docker standalone) |
 | ORM | Drizzle ORM |
 
 ## OAuth 2.0 토큰 관리
@@ -46,11 +60,11 @@ CEO의 Google Calendar를 기반으로 일정을 자동 분석, 요약, 추천, 
 # Google OAuth 2.0
 GOOGLE_CLIENT_ID=               # Google Cloud Console에서 생성
 GOOGLE_CLIENT_SECRET=           # Google Cloud Console에서 생성
-GOOGLE_REDIRECT_URI=https://{domain}/api/auth/callback
+GOOGLE_REDIRECT_URI=http://localhost:3000/api/auth/callback
 
 # 기존 인프라
 DATABASE_URL=postgresql://neondb_owner:npg_OWVKrmC21gNk@ep-divine-darkness-a1gvyg6j-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
-GOOGLE_AI_API_KEY=              # Gemini API (기존 키 재활용 가능)
+OPENAI_API_KEY=                 # OpenAI API (gpt-4o-mini)
 TELEGRAM_BOT_TOKEN=             # MacJarvisBot 토큰 (기존 인프라)
 TELEGRAM_CHAT_ID=               # CEO 텔레그램 chat_id
 ```
@@ -306,19 +320,19 @@ CREATE INDEX idx_reminder_logs_reminder ON reminder_logs(reminder_id);
 - **분당 한도**: Cloud Console에서 확인 가능 (기본 충분)
 - **예상 사용량**: 30분 틱 x 48회/일 x 2~3 API 호출 = ~144 호출/일 (한도의 0.014%)
 
-### Gemini Flash Lite API (AI 일정 분석)
+### OpenAI gpt-4o-mini (AI 일정 분석)
 - Daily Briefing: 1회/일 x ~500 토큰 = ~500 토큰/일
 - 월간: ~15,000 토큰/월
-- **비용**: ~$0.001/월 (사실상 무료)
+- **비용**: ~$0.01/월 (사실상 무료)
 
 ### NeonDB
 - 기존 인프라 활용 (추가 비용 없음)
 - calendar_cache 테이블: 일정 수백 건 수준 (무시할 수 있는 용량)
 
-### Vercel
-- 기존 무료 플랜 내 (30분 틱 API 호출 수준)
+### fly.io
+- 무료 플랜 내 (shared-cpu-1x, 256MB, auto-stop)
 
-### 총 예상 비용: 월 $0 (모두 무료 한도 내)
+### 총 예상 비용: 월 ~$0 (모두 무료 한도 내)
 
 ## 프로젝트 구조
 
@@ -366,7 +380,7 @@ npm install
 npm run dev          # 개발 서버
 npm run build        # 프로덕션 빌드
 npm run db:push      # Drizzle 스키마 적용
-vercel               # Vercel 배포
+fly deploy           # fly.io 배포
 ```
 
 ## 워크플로우

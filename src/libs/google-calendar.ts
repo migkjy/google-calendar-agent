@@ -22,28 +22,42 @@ interface EventsResponse {
   timeZone: string;
 }
 
-async function calendarFetch<T>(path: string, params?: Record<string, string>): Promise<T> {
+async function calendarFetch<T>(
+  path: string,
+  options?: { params?: Record<string, string>; method?: string; body?: unknown },
+): Promise<T> {
   const token = await getValidToken();
   if (!token) {
     throw new Error("Google Calendar not connected. Connect via /api/auth/google");
   }
 
   const url = new URL(`${CALENDAR_API}${path}`);
-  if (params) {
-    for (const [key, value] of Object.entries(params)) {
+  if (options?.params) {
+    for (const [key, value] of Object.entries(options.params)) {
       url.searchParams.set(key, value);
     }
   }
 
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  const fetchOptions: RequestInit = {
+    method: options?.method ?? "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(options?.body ? { "Content-Type": "application/json" } : {}),
+    },
+  };
+
+  if (options?.body) {
+    fetchOptions.body = JSON.stringify(options.body);
+  }
+
+  const res = await fetch(url.toString(), fetchOptions);
 
   if (!res.ok) {
     const error = await res.text();
     throw new Error(`Google Calendar API error (${res.status}): ${error}`);
   }
 
+  if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
 }
 
@@ -54,11 +68,13 @@ export async function getEvents(
   maxResults = 50,
 ): Promise<CalendarEvent[]> {
   const data = await calendarFetch<EventsResponse>("/calendars/primary/events", {
-    timeMin,
-    timeMax,
-    maxResults: String(maxResults),
-    singleEvents: "true",
-    orderBy: "startTime",
+    params: {
+      timeMin,
+      timeMax,
+      maxResults: String(maxResults),
+      singleEvents: "true",
+      orderBy: "startTime",
+    },
   });
   return data.items ?? [];
 }
@@ -73,4 +89,39 @@ export async function getUpcomingEvents(minutes: number): Promise<CalendarEvent[
   const now = new Date();
   const future = new Date(now.getTime() + minutes * 60 * 1000);
   return getEvents(now.toISOString(), future.toISOString());
+}
+
+export interface CreateEventInput {
+  summary: string;
+  description?: string;
+  location?: string;
+  start: { dateTime: string; timeZone?: string };
+  end: { dateTime: string; timeZone?: string };
+}
+
+/** 일정 생성 */
+export async function createEvent(input: CreateEventInput): Promise<CalendarEvent> {
+  return calendarFetch<CalendarEvent>("/calendars/primary/events", {
+    method: "POST",
+    body: input,
+  });
+}
+
+/** 일정 수정 */
+export async function updateEvent(
+  eventId: string,
+  input: Partial<CreateEventInput>,
+): Promise<CalendarEvent> {
+  return calendarFetch<CalendarEvent>(
+    `/calendars/primary/events/${encodeURIComponent(eventId)}`,
+    { method: "PATCH", body: input },
+  );
+}
+
+/** 일정 삭제 */
+export async function deleteEvent(eventId: string): Promise<void> {
+  await calendarFetch<void>(
+    `/calendars/primary/events/${encodeURIComponent(eventId)}`,
+    { method: "DELETE" },
+  );
 }

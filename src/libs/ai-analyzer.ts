@@ -1,7 +1,6 @@
-import type { CalendarEvent } from "@/libs/google-calendar";
+import OpenAI from "openai";
 
-const GEMINI_API = "https://generativelanguage.googleapis.com/v1beta/models";
-const MODEL = "gemini-2.0-flash-lite";
+import type { CalendarEvent } from "@/libs/google-calendar";
 
 /** 일정 목록을 받아 자연어 요약 생성 (한국어) */
 export async function generateDailyBriefing(events: CalendarEvent[]): Promise<string> {
@@ -9,7 +8,7 @@ export async function generateDailyBriefing(events: CalendarEvent[]): Promise<st
     return "오늘 예정된 일정이 없습니다. 자유롭게 활용할 수 있는 하루입니다.";
   }
 
-  const apiKey = process.env.GOOGLE_AI_API_KEY;
+  const apiKey = process.env.OPENAI_API_KEY;
 
   // AI API 없으면 템플릿 기반 fallback
   if (!apiKey) {
@@ -17,14 +16,14 @@ export async function generateDailyBriefing(events: CalendarEvent[]): Promise<st
   }
 
   try {
-    return await geminiBriefing(apiKey, events);
+    return await openAiBriefing(apiKey, events);
   } catch (error) {
-    console.error("Gemini API error, falling back to template:", error);
+    console.error("OpenAI API error, falling back to template:", error);
     return templateBriefing(events);
   }
 }
 
-async function geminiBriefing(apiKey: string, events: CalendarEvent[]): Promise<string> {
+async function openAiBriefing(apiKey: string, events: CalendarEvent[]): Promise<string> {
   const eventList = events
     .map((e) => {
       const start = e.start.dateTime
@@ -44,23 +43,20 @@ async function geminiBriefing(apiKey: string, events: CalendarEvent[]): Promise<
 오늘 일정 (${events.length}건):
 ${eventList}`;
 
-  const res = await fetch(`${GEMINI_API}/${MODEL}:generateContent?key=${apiKey}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { maxOutputTokens: 500, temperature: 0.3 },
-    }),
+  const client = new OpenAI({ apiKey });
+
+  const completion = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      { role: "system", content: "당신은 CEO의 일정 비서입니다. 간결하고 실용적으로 답변합니다." },
+      { role: "user", content: prompt },
+    ],
+    max_tokens: 500,
+    temperature: 0.3,
   });
 
-  if (!res.ok) {
-    const error = await res.text();
-    throw new Error(`Gemini API error (${res.status}): ${error}`);
-  }
-
-  const data = await res.json();
-  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (!text) throw new Error("Gemini returned empty response");
+  const text = completion.choices[0]?.message?.content;
+  if (!text) throw new Error("OpenAI returned empty response");
   return text;
 }
 
