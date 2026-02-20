@@ -46,7 +46,7 @@ ${eventList}`;
   const client = new OpenAI({ apiKey });
 
   const completion = await client.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "gpt-4.1-mini",
     messages: [
       { role: "system", content: "당신은 CEO의 일정 비서입니다. 간결하고 실용적으로 답변합니다." },
       { role: "user", content: prompt },
